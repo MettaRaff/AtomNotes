@@ -1,3 +1,4 @@
+# pyright: ignore[reportMissingImports]
 import sounddevice as sd
 import numpy as np
 import matplotlib.pyplot as plt
@@ -6,11 +7,11 @@ from collections import deque
 from threading import Thread, Event
 
 # Конфигурация
-DEVICE_ID = 9          # Ваш device_id
+DEVICE_ID = 1          # Ваш device_id
 FS = 44100             # Частота дискретизации
 BLOCK_SIZE = 2048      # Размер блока для БПФ
 CHANNELS = 1           # Количество каналов
-BUFFER_SIZE = 10        # Размер буфера для сглаживания
+BUFFER_SIZE = 3       # Размер буфера для сглаживания
 FREQ_RANGE = (20, 20000)  # Диапазон частот
 
 # Инициализация данных
@@ -95,7 +96,7 @@ def start_audio_stream():
     ):
         print("Аудиопоток запущен...")
         while not stop_event.is_set():
-            sd.sleep(100)
+            sd.sleep(10)
 
 try:
     # Запуск аудио потока
