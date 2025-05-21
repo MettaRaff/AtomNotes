@@ -5,6 +5,8 @@ import serial
 import matplotlib.pyplot as plt
 import matplotlib.animation as animation
 import time
+import tkinter as tk
+from tkinter import ttk
 from collections import deque
 from threading import Thread, Event
 
@@ -77,8 +79,10 @@ class GraphPlotter:
         # Настройка графика
         self.avg_spectrum = []
         self.data_queue = data_queue
+        self.freq_bins = freq_bins
         self.fig, self.ax = plt.subplots(figsize=(12, 6))
-        self.line, = self.ax.semilogx(freq_bins, np.zeros_like(freq_bins))
+        self.line, = self.ax.semilogx(self.freq_bins, np.zeros_like(self.freq_bins))
+        self.point, = self.ax.plot(100, -30, 'ro', markersize=8)
         self.ax.set_xlim(FREQ_RANGE)
         self.ax.set_ylim(-80, 0)
         self.ax.set_xlabel('Frequency (Hz)')
@@ -93,20 +97,49 @@ class GraphPlotter:
             if self.data_queue:
                 self.avg_spectrum = np.mean(self.data_queue, axis=0)
                 self.line.set_ydata(self.avg_spectrum)
-                #animClassic()
-        
-            return self.line,
+                print(animModule.kickPoint)
+                #x = self.freq_bins[animModule.KickPoint]
+                #y = self.avg_spectrum[animModule.KickPoint]
+                #print(f"X: {x} Y: {y}")
+                #print(self.freq_bins)
+                #self.point.set_data(animModule.KickPoint[0],
+                #                    animModule.KickPoint[1])
+                #self.point.set_xdata(animModule.KickPoint[0])
+                #self.point.set_ydata(animModule.KickPoint[1])
+            return self.point, self.line,
         except Exception as e:
             print(f"Ошибка обновления: {e}")
-            return self.line,
+            return self.point, self.line,
+
+class AppUI:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("Audio Spectrum Analyzer")
+
+        self.style = ttk.Style()
+        self.style.configure("Custom.TFrame", background="lightcoral")
+
+        self.control_frame = ttk.Frame(self.root, 
+                                       padding=10, 
+                                       width=200, 
+                                       height=140,
+                                       style="Custom.TFrame")
+        self.control_frame.pack(pady=20, fill="both", expand=True)
+        self.root.mainloop()
 
 class AnimationModule:
-    def __init__(self):
+    def __init__(self, freq_bins):
         print("It init Anim Module!")
         self.divides = []
+        self.avg_spectrum = []
+        self.freq_bins = freq_bins
+        self.kickPoint = {0.0, 0.0}
         #рассчитаем индексы разделительных частот    
         self.divides.append(self.searchGraphIndex(DIVIDE_A))
         self.divides.append(self.searchGraphIndex(DIVIDE_B))
+        self.kickA = self.searchGraphIndex(10)
+        self.kickB = self.searchGraphIndex(150)
+        self.KickPoint = []
 
     def searchGraphIndex(self, freq):
         for i in range(0, BLOCK_SIZE//2, 1):
@@ -115,25 +148,54 @@ class AnimationModule:
         return 0  
     
     def animClassic(self):
-        if(len(plotter.avg_spectrum) > 0):
-            bass = np.mean(plotter.avg_spectrum[4:self.divides[0]])    # 20-100 Гц
-            mids = np.mean(plotter.avg_spectrum[self.divides[0]:self.divides[1]])  # 100-1000 Гц
-            highs = np.mean(plotter.avg_spectrum[self.divides[1]:])    # 1000+ Гц
+        if(len(self.avg_spectrum) > 0):
+            bass = np.mean(self.avg_spectrum[4:self.divides[0]])    # 20-100 Гц
+            mids = np.mean(self.avg_spectrum[self.divides[0]:self.divides[1]])  # 100-1000 Гц
+            highs = np.mean(self.avg_spectrum[self.divides[1]:])    # 1000+ Гц
             bass_fin = int(np.interp(bass, [-100, 0], [0, 255]))
             mids_fin = int(np.interp(mids, [-100, 0], [0, 255]))
             highs_fin = int(np.interp(highs, [-100, 0], [0, 255]))
             
             color_data = str(bass_fin) + ',' + str(mids_fin) + ',' + str(highs_fin) + ';'
-            print(color_data)
+            
+            self.kickPoint = self.kickSearch()            
+            
+            #print(color_data)
             #ser.write(color_data.encode()) 
+
+    def pointMaxSearch(self, indexA, indexB):
+        self.maxIndex = -1
+        self.maxVal = -150
+        for i in range(indexA, indexB, 1):
+            if(self.avg_spectrum[i]>self.maxVal):
+                self.maxVal = self.avg_spectrum[i]
+                self.maxIndex = i
+        return self.maxIndex
+    
+    def pointCoords(self, indexX):
+        self.point = []
+        #self.point.append(self.freq_bins[indexX])
+        self.point.append(int(self.freq_bins[indexX]))
+        self.point.append(int(self.avg_spectrum[indexX]))
+        return self.point
+    
+    def kickSearch(self):
+        self.index = self.pointMaxSearch(self.kickA, self.kickB)
+        return self.pointCoords(self.index)
     
     def animProcessor(self):
         try:            
             while True:
+                self.avg_spectrum = plotter.avg_spectrum
                 self.animClassic()
                 time.sleep(0.03)
         except Exception as e:
             print(f"Ошибка обновления: {e}")
+
+def uiInit():
+    root = tk.Tk()
+    app = AppUI(root)
+    root.mainloop()
 
 try:
     print("It try block!")
@@ -145,7 +207,7 @@ try:
                            FREQ_RANGE)
     plotter = GraphPlotter(fftAnalyzer.freq_bins, 
                            fftAnalyzer.data_queue)
-    animModule = AnimationModule()
+    animModule = AnimationModule(fftAnalyzer.freq_bins)
 
     audio_thread = Thread(target=fftAnalyzer.start_audio_stream)
     audio_thread.daemon = True
@@ -155,10 +217,14 @@ try:
     anim_thread.daemon = True
     anim_thread.start()
 
+    #ui_thread = Thread(target = uiInit)
+    #ui_thread.daemon = True
+    #ui_thread.start()
+
     # Запуск анимации
     ani = animation.FuncAnimation(
         plotter.fig, 
-        plotter.update_plot, 
+        plotter.update_plot,
         interval=50,
         blit=True,
         cache_frame_data=False
