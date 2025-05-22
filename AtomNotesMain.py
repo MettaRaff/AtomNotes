@@ -78,11 +78,15 @@ class GraphPlotter:
         print("It init graph plotter!")
         # Настройка графика
         self.avg_spectrum = []
+        self.y_arr = []
         self.data_queue = data_queue
         self.freq_bins = freq_bins
         self.fig, self.ax = plt.subplots(figsize=(12, 6))
         self.line, = self.ax.semilogx(self.freq_bins, np.zeros_like(self.freq_bins))
         self.point, = self.ax.plot(100, -30, 'ro', markersize=8)
+
+        self.lines = self.ax.lines
+
         self.ax.set_xlim(FREQ_RANGE)
         self.ax.set_ylim(-80, 0)
         self.ax.set_xlabel('Frequency (Hz)')
@@ -96,8 +100,18 @@ class GraphPlotter:
         try:
             if self.data_queue:
                 self.avg_spectrum = np.mean(self.data_queue, axis=0)
-                self.line.set_ydata(self.avg_spectrum)
-                print(animModule.kickPoint)
+                #self.line.set_ydata(self.avg_spectrum)
+                #print(animModule.kickPoint)
+                
+                #self.y_arr.append(animModule.KickPoint[1])
+                for i in range(len(self.lines)):
+                    if(i == 0):  
+                        self.lines[i].set_ydata(self.avg_spectrum)
+                    elif(i == 1):
+                        if(len(animModule.maxPointsX)>0):
+                            self.lines[i].set_data(animModule.maxPointsX,
+                                                   animModule.maxPointsY)
+                #self.y_arr.clear                    
                 #x = self.freq_bins[animModule.KickPoint]
                 #y = self.avg_spectrum[animModule.KickPoint]
                 #print(f"X: {x} Y: {y}")
@@ -133,13 +147,13 @@ class AnimationModule:
         self.divides = []
         self.avg_spectrum = []
         self.freq_bins = freq_bins
-        self.kickPoint = {0.0, 0.0}
+        self.maxPointsX = []
+        self.maxPointsY = []
         #рассчитаем индексы разделительных частот    
         self.divides.append(self.searchGraphIndex(DIVIDE_A))
         self.divides.append(self.searchGraphIndex(DIVIDE_B))
-        self.kickA = self.searchGraphIndex(10)
-        self.kickB = self.searchGraphIndex(150)
-        self.KickPoint = []
+        self.kickA = self.searchGraphIndex(60)
+        self.kickB = self.searchGraphIndex(150)    
 
     def searchGraphIndex(self, freq):
         for i in range(0, BLOCK_SIZE//2, 1):
@@ -158,7 +172,7 @@ class AnimationModule:
             
             color_data = str(bass_fin) + ',' + str(mids_fin) + ',' + str(highs_fin) + ';'
             
-            self.kickPoint = self.kickSearch()            
+            self.kickSearch()   #ищем точку макс гомкости в басах                       
             
             #print(color_data)
             #ser.write(color_data.encode()) 
@@ -172,21 +186,17 @@ class AnimationModule:
                 self.maxIndex = i
         return self.maxIndex
     
-    def pointCoords(self, indexX):
-        self.point = []
-        #self.point.append(self.freq_bins[indexX])
-        self.point.append(int(self.freq_bins[indexX]))
-        self.point.append(int(self.avg_spectrum[indexX]))
-        return self.point
-    
     def kickSearch(self):
         self.index = self.pointMaxSearch(self.kickA, self.kickB)
-        return self.pointCoords(self.index)
+        self.maxPointsX.append(self.freq_bins[self.index])            
+        self.maxPointsY.append(self.avg_spectrum[self.index]) 
     
     def animProcessor(self):
         try:            
             while True:
                 self.avg_spectrum = plotter.avg_spectrum
+                self.maxPointsX.clear()
+                self.maxPointsY.clear()
                 self.animClassic()
                 time.sleep(0.03)
         except Exception as e:
