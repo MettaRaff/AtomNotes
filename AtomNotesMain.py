@@ -21,6 +21,7 @@ BUFFER_SIZE = 1           # Размер буфера для сглаживан�
 FREQ_RANGE = (20, 20000)  # Диапазон частот
 DIVIDE_A = 160.0 #Hz
 DIVIDE_B = 2000.0 #Hz
+SIDECHAIN_POWER = 4
 
 class Analyzer:
     def __init__(self, device_id, fs, block_size, channels, buffer_size, freq_range):
@@ -78,12 +79,14 @@ class GraphPlotter:
         print("It init graph plotter!")
         # Настройка графика
         self.avg_spectrum = []
+        self.rgb_spectrum = []
         self.y_arr = []
         self.data_queue = data_queue
         self.freq_bins = freq_bins
         self.fig, self.ax = plt.subplots(figsize=(12, 6))
         self.line, = self.ax.semilogx(self.freq_bins, np.zeros_like(self.freq_bins))
         self.point, = self.ax.plot(100, -30, 'ro', markersize=8)
+        #self.line2, = self.ax.semilogx(self.freq_bins, np.zeros_like(self.freq_bins), color='red')
 
         self.lines = self.ax.lines
 
@@ -99,32 +102,25 @@ class GraphPlotter:
         """Обновление графика"""
         try:
             if self.data_queue:
-                self.avg_spectrum = np.mean(self.data_queue, axis=0)
-                #self.line.set_ydata(self.avg_spectrum)
-                #print(animModule.kickPoint)
-                
-                #self.y_arr.append(animModule.KickPoint[1])
+                self.rgb_spectrum = self.avg_spectrum
+                self.avg_spectrum = np.mean(self.data_queue, axis=0)                
+
                 for i in range(len(self.lines)):
                     if(i == 0):  
                         self.lines[i].set_ydata(self.avg_spectrum)
                     elif(i == 1):
                         if(len(animModule.maxPointsX)>0):
-                            self.lines[i].set_data(animModule.maxPointsX,
+                            self.point.set_data(animModule.maxPointsX,
                                                    animModule.maxPointsY)
-                #self.y_arr.clear                    
-                #x = self.freq_bins[animModule.KickPoint]
-                #y = self.avg_spectrum[animModule.KickPoint]
-                #print(f"X: {x} Y: {y}")
-                #print(self.freq_bins)
-                #self.point.set_data(animModule.KickPoint[0],
-                #                    animModule.KickPoint[1])
-                #self.point.set_xdata(animModule.KickPoint[0])
-                #self.point.set_ydata(animModule.KickPoint[1])
-            return self.point, self.line,
+                    #elif(i == 2):
+                    #    if(len(self.rgb_spectrum)>0):
+                    #        self.lines[i].set_ydata(self.rgb_spectrum)
+
+            return self.point, self.line, #self.line2,
         except Exception as e:
             print(f"Ошибка обновления: {e}")
-            return self.point, self.line,
-
+            return self.point, self.line, #self.line2,
+ 
 class AppUI:
     def __init__(self, root):
         self.root = root
@@ -146,14 +142,15 @@ class AnimationModule:
         print("It init Anim Module!")
         self.divides = []
         self.avg_spectrum = []
+        self.rgb_spectrum = []
         self.freq_bins = freq_bins
         self.maxPointsX = []
         self.maxPointsY = []
         #рассчитаем индексы разделительных частот    
         self.divides.append(self.searchGraphIndex(DIVIDE_A))
         self.divides.append(self.searchGraphIndex(DIVIDE_B))
-        self.kickA = self.searchGraphIndex(60)
-        self.kickB = self.searchGraphIndex(150)    
+
+        self.kick = PointSidechain(60, 150, self.freq_bins)   
 
     def searchGraphIndex(self, freq):
         for i in range(0, BLOCK_SIZE//2, 1):
@@ -166,30 +163,31 @@ class AnimationModule:
             bass = np.mean(self.avg_spectrum[4:self.divides[0]])    # 20-100 Гц
             mids = np.mean(self.avg_spectrum[self.divides[0]:self.divides[1]])  # 100-1000 Гц
             highs = np.mean(self.avg_spectrum[self.divides[1]:])    # 1000+ Гц
+            
+            if(self.kick.valDiffer>0):
+                mids -= self.kick.valDiffer * SIDECHAIN_POWER
+                highs -= self.kick.valDiffer * SIDECHAIN_POWER
+
             bass_fin = int(np.interp(bass, [-100, 0], [0, 255]))
             mids_fin = int(np.interp(mids, [-100, 0], [0, 255]))
             highs_fin = int(np.interp(highs, [-100, 0], [0, 255]))
             
             color_data = str(bass_fin) + ',' + str(mids_fin) + ',' + str(highs_fin) + ';'
-            
-            self.kickSearch()   #ищем точку макс гомкости в басах                       
-            
+                                 
+            #ищем точку макс гомкости в установленном диапазоне
+            self.kick.pointSearch(self.avg_spectrum)
+            self.maxPointsX.append(self.kick.X)            
+            self.maxPointsY.append(self.kick.Y)
+            #print(self.kick.valDiffer)
+
             #print(color_data)
             #ser.write(color_data.encode()) 
-
-    def pointMaxSearch(self, indexA, indexB):
-        self.maxIndex = -1
-        self.maxVal = -150
-        for i in range(indexA, indexB, 1):
-            if(self.avg_spectrum[i]>self.maxVal):
-                self.maxVal = self.avg_spectrum[i]
-                self.maxIndex = i
-        return self.maxIndex
-    
-    def kickSearch(self):
-        self.index = self.pointMaxSearch(self.kickA, self.kickB)
-        self.maxPointsX.append(self.freq_bins[self.index])            
-        self.maxPointsY.append(self.avg_spectrum[self.index]) 
+            
+            #for i in range(len(self.freq_bins)):
+            #    if(i >= 0 and i < self.divides[0]):
+            #        plotter.rgb_spectrum[i] = self.avg_spectrum[i] * SIDECHAIN_POWER
+            #    elif(i >= self.divides[0] and i < BLOCK_SIZE/2):
+            #        plotter.rgb_spectrum[i] = self.avg_spectrum[i] - self.kick.valDiffer * SIDECHAIN_POWER
     
     def animProcessor(self):
         try:            
@@ -201,6 +199,47 @@ class AnimationModule:
                 time.sleep(0.03)
         except Exception as e:
             print(f"Ошибка обновления: {e}")
+
+class PointSidechain:
+    def __init__(self, aFreq, bFreq, freq_bins):
+        self.aFreq = self.searchGraphIndex(aFreq)
+        self.bFreq = self.searchGraphIndex(bFreq)
+        self.avg_spectrum = []
+        self.freq_bins = freq_bins
+        self.X = 0.0
+        self.Y = 0.0
+        self.minVal = 0.0
+        self.lastVal = 0.0
+        self.valDiffer = 0.0
+    
+    def searchGraphIndex(self, freq):
+        for i in range(0, BLOCK_SIZE//2, 1):
+           if(freq <= fftAnalyzer.freq_bins[i]):
+                return i
+        return 0
+
+    def pointMaxSearch(self, indexA, indexB):
+        self.maxIndex = -1
+        self.maxVal = -150
+        for i in range(indexA, indexB, 1):
+            if(self.avg_spectrum[i]>self.maxVal):
+                self.maxVal = self.avg_spectrum[i]
+                self.maxIndex = i
+        return self.maxIndex
+
+    def pointSearch(self, avg_spectrum):
+        self.avg_spectrum = avg_spectrum
+        self.index = self.pointMaxSearch(self.aFreq, self.bFreq)    
+        self.lastVal = self.Y    
+        self.X = self.freq_bins[self.index]        
+        self.Y = self.avg_spectrum[self.index]
+        if(self.minVal > self.Y):
+            self.minVal = self.Y
+        else:
+            self.valDiffer= self.Y-self.minVal  
+
+        if(self.Y < self.lastVal):
+            self.minVal = self.Y      
 
 def uiInit():
     root = tk.Tk()
