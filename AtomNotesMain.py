@@ -11,17 +11,17 @@ from collections import deque
 from threading import Thread, Event
 
 # Конфигурация
-DEVICE_ID = 9             # Ваш device_id
+DEVICE_ID = 1             # Ваш device_id
 FS = 44100                # Частота дискретизации
 BLOCK_SIZE = 2048         # Размер блока для БПФ
-COM_PORT = 'COM7'         # Замените на ваш порт
+COM_PORT = 'COM6'         # Замените на ваш порт
 BAUDRATE = 115200
 CHANNELS = 1              # Количество каналов
 BUFFER_SIZE = 1           # Размер буфера для сглаживания
 FREQ_RANGE = (20, 20000)  # Диапазон частот
 DIVIDE_A = 160.0 #Hz
 DIVIDE_B = 2000.0 #Hz
-SIDECHAIN_POWER = 4
+SIDECHAIN_POWER = 1
 
 class Analyzer:
     def __init__(self, device_id, fs, block_size, channels, buffer_size, freq_range):
@@ -139,18 +139,25 @@ class AppUI:
 
 class AnimationModule:
     def __init__(self, freq_bins):
+        #self.ser = serial
+        self.freq_bins = freq_bins
         print("It init Anim Module!")
         self.divides = []
         self.avg_spectrum = []
         self.rgb_spectrum = []
-        self.freq_bins = freq_bins
         self.maxPointsX = []
         self.maxPointsY = []
         #рассчитаем индексы разделительных частот    
         self.divides.append(self.searchGraphIndex(DIVIDE_A))
         self.divides.append(self.searchGraphIndex(DIVIDE_B))
 
-        self.kick = PointSidechain(60, 150, self.freq_bins)   
+        self.ser = serial.Serial(COM_PORT, BAUDRATE, timeout=1)
+
+        self.kick = PointSidechain(60, 150, self.freq_bins)  
+
+    def __del__(self):
+        self.ser.close()
+        print("Закрытие СОМ порта...")
 
     def searchGraphIndex(self, freq):
         for i in range(0, BLOCK_SIZE//2, 1):
@@ -181,7 +188,7 @@ class AnimationModule:
             #print(self.kick.valDiffer)
 
             #print(color_data)
-            #ser.write(color_data.encode()) 
+            self.ser.write(color_data.encode()) 
             
             #for i in range(len(self.freq_bins)):
             #    if(i >= 0 and i < self.divides[0]):
@@ -247,7 +254,7 @@ def uiInit():
     root.mainloop()
 
 try:
-    print("It try block!")
+    print("It try block!") 
     fftAnalyzer = Analyzer(DEVICE_ID, 
                            FS, 
                            BLOCK_SIZE, 
@@ -282,6 +289,7 @@ try:
 
 except KeyboardInterrupt:
     print("\nОстановка...")
+    ser.close()
 
 finally:
     fftAnalyzer.stop_event.set()
