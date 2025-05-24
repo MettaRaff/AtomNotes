@@ -8,6 +8,7 @@ import time
 import tkinter as tk
 from tkinter import ttk
 from collections import deque
+from collections import defaultdict
 from threading import Thread, Event
 
 # Конфигурация
@@ -22,6 +23,7 @@ FREQ_RANGE = (20, 20000)  # Диапазон частот
 DIVIDE_A = 160.0 #Hz
 DIVIDE_B = 2000.0 #Hz
 SIDECHAIN_POWER = 1
+SMOOTH_COEFF = 0.1
 
 class Analyzer:
     def __init__(self, device_id, fs, block_size, channels, buffer_size, freq_range):
@@ -85,7 +87,7 @@ class GraphPlotter:
         self.freq_bins = freq_bins
         self.fig, self.ax = plt.subplots(figsize=(12, 6))
         self.line, = self.ax.semilogx(self.freq_bins, np.zeros_like(self.freq_bins))
-        self.point, = self.ax.plot(100, -30, 'ro', markersize=8)
+        self.point, = self.ax.plot([], [], 'ro', markersize=8)
         #self.line2, = self.ax.semilogx(self.freq_bins, np.zeros_like(self.freq_bins), color='red')
 
         self.lines = self.ax.lines
@@ -120,7 +122,118 @@ class GraphPlotter:
         except Exception as e:
             print(f"Ошибка обновления: {e}")
             return self.point, self.line, #self.line2,
- 
+
+class NoteDetector:
+    def __init__(self, freqs):
+        # Диапазон анализа (200-4000 Гц)
+        self.min_freq = 200.0
+        self.max_freq = 4000.0
+        
+        # Соответствие нот частотам (C4 = 261.63 Гц, A4 = 440 Гц и т.д.)
+        self.note_freqs = self.create_note_table()
+        
+        # Цвета для нот (RGB значения)
+        self.note_colors = {
+            'C': (255, 0, 0),    # Красный
+            'C#': (255, 128, 0), # Оранжевый
+            'D': (255, 255, 0), # Желтый
+            'D#': (128, 255, 0), # Лаймовый
+            'E': (0, 255, 0),    # Зеленый
+            'F': (0, 255, 128),  # Бирюзовый
+            'F#': (0, 255, 255), # Голубой
+            'G': (0, 128, 255), # Синий
+            'G#': (0, 0, 255),   # Темно-синий
+            'A': (128, 0, 255), # Фиолетовый
+            'A#': (255, 0, 255), # Пурпурный
+            'B': (255, 0, 128)  # Розовый
+        }
+        self.mask = []
+        self.filtered_freqs = []
+        self.filtered_amps = []
+        self.note = ""
+        self.sorted_notes = []
+        for i in range(len(freqs)):
+            if(freqs[i] >= self.min_freq and freqs[i] <= self.max_freq):
+                self.mask.append(i)
+        for i in range(len(self.mask)):
+            self.filtered_freqs.append(freqs[self.mask[i]])
+
+    def create_note_table(self):
+        """Создает таблицу соответствия нот и частот"""
+        notes = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
+        note_table = {}
+        
+        # Заполняем частоты для октав 3-8 (C3 = 130.81 Гц, A4 = 440 Гц и т.д.)
+        for octave in range(3, 9):
+            for i, note in enumerate(notes):
+                freq = 440.0 * 2**((octave-4) + (i-9)/12.0)
+                note_name = f"{note}{octave}"
+                note_table[note_name] = freq
+        return note_table
+
+    def freq_to_note(self, freq):
+        """Преобразует частоту в ближайшую ноту"""
+        min_diff = float('inf')
+        closest_note = None
+        
+        for note, note_freq in self.note_freqs.items():
+            diff = abs(freq - note_freq)
+            if diff < min_diff:
+                min_diff = diff
+                closest_note = note
+        return closest_note.split('0')[0]  # Убираем октаву
+
+    def find_peaks(self, freqs, amplitudes, threshold=-40):
+        """Находит значимые пики в спектре"""
+        peaks = []
+        for i in range(1, len(amplitudes)-1):
+            if amplitudes[i] > threshold and \
+               amplitudes[i] > amplitudes[i-1] and \
+               amplitudes[i] > amplitudes[i+1]:
+                peaks.append((freqs[i], amplitudes[i]))
+        return sorted(peaks, key=lambda x: x[1], reverse=True)[:5]  # Топ-5 пиков
+
+    def detect_notes(self, amplitudes):
+        ###Основная функция детекции нот###
+        # Фильтрация по частотному диапазону        
+        self.filtered_amps.clear()
+        if(len(amplitudes)>0):
+            for i in range(len(self.mask)):
+                self.filtered_amps.append(amplitudes[self.mask[i]])                
+        
+        if len(self.filtered_amps) == 0:
+            return []
+
+        # Находим значимые пики
+        self.peaks = self.find_peaks(self.filtered_freqs, self.filtered_amps)
+        # Собираем ноты с весами
+        if(len(self.peaks)>0):
+            note_weights = defaultdict(float)
+            for freq, amp in self.peaks:
+                self.note = self.freq_to_note(freq)
+                note_weights[self.note] += amp  # Вес ноты зависит от амплитуды
+  
+        # Выбираем 2 наиболее значимые ноты
+            self.sorted_notes = sorted(note_weights.items(), key=lambda x: x[1], reverse=True)
+
+        return [note for note, _ in self.sorted_notes[:2]]
+
+    def get_note_color(self, notes):
+        ###Возвращает цвет для списка нот###
+        if not notes:
+            return (0, 0, 0)  # Черный цвет при отсутствии нот
+        
+        # Смешиваем цвета для нескольких нот
+        color = [0, 0, 0]
+        for note in notes[:2]:  # Берем не более двух нот
+            note = note[:-1]
+            rgb = self.note_colors.get(note)            
+            for i in range(3):
+                color[i] += rgb[i]
+        
+        # Нормализация
+        return tuple(min(255, int(c / len(notes))) for c in color)
+
 class AppUI:
     def __init__(self, root):
         self.root = root
@@ -139,7 +252,6 @@ class AppUI:
 
 class AnimationModule:
     def __init__(self, freq_bins):
-        #self.ser = serial
         self.freq_bins = freq_bins
         print("It init Anim Module!")
         self.divides = []
@@ -147,13 +259,15 @@ class AnimationModule:
         self.rgb_spectrum = []
         self.maxPointsX = []
         self.maxPointsY = []
+        self.color_f = [0, 0, 0]
         #рассчитаем индексы разделительных частот    
         self.divides.append(self.searchGraphIndex(DIVIDE_A))
         self.divides.append(self.searchGraphIndex(DIVIDE_B))
 
         self.ser = serial.Serial(COM_PORT, BAUDRATE, timeout=1)
 
-        self.kick = PointSidechain(60, 150, self.freq_bins)  
+        self.kick = PointSidechain(60, 150, self.freq_bins)
+        self.detector = NoteDetector(freq_bins)
 
     def __del__(self):
         self.ser.close()
@@ -187,22 +301,28 @@ class AnimationModule:
             self.maxPointsY.append(self.kick.Y)
             #print(self.kick.valDiffer)
 
-            #print(color_data)
+            #отправка в сом порт данных
             self.ser.write(color_data.encode()) 
-            
-            #for i in range(len(self.freq_bins)):
-            #    if(i >= 0 and i < self.divides[0]):
-            #        plotter.rgb_spectrum[i] = self.avg_spectrum[i] * SIDECHAIN_POWER
-            #    elif(i >= self.divides[0] and i < BLOCK_SIZE/2):
-            #        plotter.rgb_spectrum[i] = self.avg_spectrum[i] - self.kick.valDiffer * SIDECHAIN_POWER
     
     def animProcessor(self):
         try:            
             while True:
-                self.avg_spectrum = plotter.avg_spectrum
-                self.maxPointsX.clear()
-                self.maxPointsY.clear()
-                self.animClassic()
+                #забираем спектр в локаньную переменную
+                self.avg_spectrum = plotter.avg_spectrum                
+                #определяем ноты и цвет для них
+                notes = self.detector.detect_notes(self.avg_spectrum)
+                color = self.detector.get_note_color(notes)
+                new_color = list(color)
+                for i in range(3):
+                    self.color_f[i] += (new_color[i] - self.color_f[i]) * SMOOTH_COEFF
+                #фильтрованное += (новое - фильтрованное) * коэффициент:
+                color_data = str(int(self.color_f[0])) + ',' + str(int(self.color_f[1])) + ',' + str(int(self.color_f[2])) + ';'
+            
+                #print(color_data)
+                self.ser.write(color_data.encode()) 
+                #self.maxPointsX.clear()
+                #self.maxPointsY.clear()
+                #self.animClassic()
                 time.sleep(0.03)
         except Exception as e:
             print(f"Ошибка обновления: {e}")
@@ -217,7 +337,7 @@ class PointSidechain:
         self.Y = 0.0
         self.minVal = 0.0
         self.lastVal = 0.0
-        self.valDiffer = 0.0
+        self.valDiffer = 0.0        
     
     def searchGraphIndex(self, freq):
         for i in range(0, BLOCK_SIZE//2, 1):
@@ -289,7 +409,7 @@ try:
 
 except KeyboardInterrupt:
     print("\nОстановка...")
-    ser.close()
+    animModule.ser.close()
 
 finally:
     fftAnalyzer.stop_event.set()
