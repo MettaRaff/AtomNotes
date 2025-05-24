@@ -24,6 +24,7 @@ DIVIDE_A = 160.0 #Hz
 DIVIDE_B = 2000.0 #Hz
 SIDECHAIN_POWER = 1
 SMOOTH_COEFF = 0.1
+BASS_TRESHOLD = -50
 
 class Analyzer:
     def __init__(self, device_id, fs, block_size, channels, buffer_size, freq_range):
@@ -259,7 +260,7 @@ class AnimationModule:
         self.rgb_spectrum = []
         self.maxPointsX = []
         self.maxPointsY = []
-        self.color_f = [0, 0, 0]
+        self.color_f = [0, 0, 0, 0]
         #рассчитаем индексы разделительных частот    
         self.divides.append(self.searchGraphIndex(DIVIDE_A))
         self.divides.append(self.searchGraphIndex(DIVIDE_B))
@@ -267,7 +268,7 @@ class AnimationModule:
         self.ser = serial.Serial(COM_PORT, BAUDRATE, timeout=1)
 
         self.kick = PointSidechain(60, 150, self.freq_bins)
-        self.detector = NoteDetector(freq_bins)
+        self.detector = NoteDetector(self.freq_bins)
 
     def __del__(self):
         self.ser.close()
@@ -278,6 +279,29 @@ class AnimationModule:
            if(freq <= fftAnalyzer.freq_bins[i]):
                 return i
         return 0  
+    
+    def kick_sidechain(self, rgb_list):
+        if(len(rgb_list) >= 3): # проверка наличия массива
+            if(self.kick.bass_avg_volume > BASS_TRESHOLD and self.kick.valDiffer > 20):
+                value = np.interp(self.kick.bass_avg_volume, [-100.0, 0.0], [0.0, 1.0])
+                #rgb_list[0] += self.kick.valDiffer * SIDECHAIN_POWER
+                rgb_list[1] -= rgb_list[0] * value
+                rgb_list[2] -= rgb_list[0] * value
+                print(value)
+                #move = self.kick.valDiffer * SIDECHAIN_POWER * self.kick.bass_avg_volume
+                #rgb_list[0] += move
+                #rgb_list[1] -= move
+                #rgb_list[2] -= move
+            for i in range(3):                    
+                rgb_list[i] = min(rgb_list[i], 255)
+        
+        return rgb_list
+    
+    def bass_add(self, rgb_list = list):
+        if(self.kick.bass_avg_volume > BASS_TRESHOLD):
+            bassValue = np.interp(self.kick.bass_avg_volume, [-100.0, 0.0], [0, 50])
+            rgb_list[3] = bassValue
+        return rgb_list
     
     def animClassic(self):
         if(len(self.avg_spectrum) > 0):
@@ -307,22 +331,39 @@ class AnimationModule:
     def animProcessor(self):
         try:            
             while True:
+                self.maxPointsX.clear()
+                self.maxPointsY.clear()
                 #забираем спектр в локаньную переменную
-                self.avg_spectrum = plotter.avg_spectrum                
+                self.avg_spectrum = plotter.avg_spectrum 
+                if(len(self.avg_spectrum) > 0): 
+                    self.kick.pointSearch(self.avg_spectrum)
+                    self.maxPointsX.append(self.kick.X)            
+                    self.maxPointsY.append(self.kick.Y)  
+                    self.maxPointsX.append(self.kick.X)            
+                    self.maxPointsY.append(self.kick.minVal)             
                 #определяем ноты и цвет для них
                 notes = self.detector.detect_notes(self.avg_spectrum)
                 color = self.detector.get_note_color(notes)
                 new_color = list(color)
-                for i in range(3):
-                    self.color_f[i] += (new_color[i] - self.color_f[i]) * SMOOTH_COEFF
-                #фильтрованное += (новое - фильтрованное) * коэффициент:
-                color_data = str(int(self.color_f[0])) + ',' + str(int(self.color_f[1])) + ',' + str(int(self.color_f[2])) + ';'
+                new_color.append(0.0)
+
+                # добавление ударных
+                #new_color = self.kick_sidechain(new_color)
+                # добавление баса
+                #new_color = self.bass_add(new_color)
+
+                for i in range(4):
+                    self.color_f[i] += (new_color[i] - self.color_f[i]) * SMOOTH_COEFF               
+
+                color_data = str(int(self.color_f[0])) + ',' 
+                color_data += str(int(self.color_f[1])) + ',' 
+                color_data += str(int(self.color_f[2])) + ','
+                color_data += str(int(self.color_f[3])) + ';'   
             
                 #print(color_data)
                 self.ser.write(color_data.encode()) 
-                #self.maxPointsX.clear()
-                #self.maxPointsY.clear()
                 #self.animClassic()
+                
                 time.sleep(0.03)
         except Exception as e:
             print(f"Ошибка обновления: {e}")
@@ -337,7 +378,8 @@ class PointSidechain:
         self.Y = 0.0
         self.minVal = 0.0
         self.lastVal = 0.0
-        self.valDiffer = 0.0        
+        self.valDiffer = 0.0
+        self.bass_avg_volume = 0.0        
     
     def searchGraphIndex(self, freq):
         for i in range(0, BLOCK_SIZE//2, 1):
@@ -355,18 +397,22 @@ class PointSidechain:
         return self.maxIndex
 
     def pointSearch(self, avg_spectrum):
+        ### основной цикл точки ###
         self.avg_spectrum = avg_spectrum
         self.index = self.pointMaxSearch(self.aFreq, self.bFreq)    
         self.lastVal = self.Y    
         self.X = self.freq_bins[self.index]        
         self.Y = self.avg_spectrum[self.index]
-        if(self.minVal > self.Y):
-            self.minVal = self.Y
+        self.bass_avg_volume = np.mean(self.avg_spectrum[self.aFreq:self.bFreq])
+        
+        if(self.minVal > self.bass_avg_volume):
+            self.minVal = self.bass_avg_volume
         else:
-            self.valDiffer= self.Y-self.minVal  
+            self.valDiffer = self.Y-self.minVal  
 
-        if(self.Y < self.lastVal):
-            self.minVal = self.Y      
+        if(self.lastVal - self.bass_avg_volume > 5):
+            self.minVal = self.bass_avg_volume      
+        #self.bass_avg_volume = np.interp(self.bass_avg_volume, [-120.0, 0.0], [0.0, 1.0])
 
 def uiInit():
     root = tk.Tk()
